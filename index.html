@@ -108,7 +108,6 @@ let hudS='';
 function hud(s,col){if(s===hudS)return;hudS=s;hx.clearRect(0,0,800,120);hx.fillStyle='rgba(12,15,20,.85)';hx.fillRect(0,0,800,120);hx.fillStyle=col||'#fff';hx.textAlign='center';
  let f=42;hx.font='700 '+f+'px system-ui,sans-serif';while(hx.measureText(s).width>760&&f>16){f-=2;hx.font='700 '+f+'px system-ui,sans-serif'}hx.fillText(s,400,72);htex.needsUpdate=true;hm.visible=true}
 const front=(d,dy)=>new T.Vector3(hpV.x+hf.x*d,hpV.y+dy,hpV.z+hf.z*d);
-const sidePos=()=>front(.6,-.25).addScaledVector(new T.Vector3(-hf.z,0,hf.x),.6);   // à direita e abaixo, fora do campo central
 
 /* ===== Telas ===== */
 const SP={
@@ -247,13 +246,13 @@ renderer.setAnimationLoop((t,frame)=>{
  light.position.set(FP.x,FP.y+.5,FP.z);light.intensity=have&&!out?fi*(1.2+R()*.8):0;
  if(state==='SIMULATION'||state==='COMPLETED')hm.position.set(FP.x,FP.y+1.3,FP.z);
  if(hm.visible)hm.lookAt(hpV.x,hm.position.y,hpV.z);
- if(state!=='INTRO'){xm.visible=true;xm.position.lerp(sidePos(),.1);xm.lookAt(hpV.x,xm.position.y,hpV.z)}else xm.visible=false;
+ if(state!=='INTRO'){xm.visible=true;xm.position.lerp(front(.7,-.5),.1);xm.lookAt(hpV.x,xm.position.y,hpV.z)}else xm.visible=false;
  renderer.render(scene,cam)});
 
 /* ===== Sessão WebXR ===== */
 renderer.xr.addEventListener('sessionstart',()=>{const s=renderer.xr.getSession();
  mkOK=mkReq&&typeof XRFrame!=='undefined'&&'getImageTrackingResults' in XRFrame.prototype;
- $('ui').hidden=true;xm.position.copy(sidePos());resetSim();have=false;method='none';go('SCANNING')});
+ $('ui').hidden=true;xm.position.copy(front(.7,-.5));resetSim();have=false;method='none';go('SCANNING')});
 renderer.xr.addEventListener('sessionend',cleanupToIntro);
 (navigator.xr?navigator.xr.isSessionSupported('immersive-ar').catch(()=>false):Promise.resolve(false)).then(ok=>{
  $('go').disabled=!ok;st.textContent=ok?'AR disponível neste dispositivo.':'AR indisponível aqui. Abra no Navegador do Meta Quest 3.'});
