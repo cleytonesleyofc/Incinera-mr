@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>InCinera MR – Simulador de incêndio</title>
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);--bg:#eef1f4;--fg:#14171c;--stage:#0e1014;--on:#f2f4f7;--acc:#c8102e}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171c;--fg:#eef1f4}}
+:root[data-theme="dark"]{--bg:#14171c;--fg:#eef1f4}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);font:16px/1.5 "Segoe UI Variable",system-ui,sans-serif}
+#stage{position:relative;height:100%;background:var(--stage);color:var(--on);overflow:auto}
+canvas{display:block;position:absolute;inset:0;width:100%;height:100%}
+#ui{position:relative;padding:20px 16px;text-align:center}
+#ui h1{margin:0;font-size:1.7rem;font-weight:700;letter-spacing:.04em}
+#ui p{margin:2px auto 10px;max-width:34rem}
+#il{text-align:left;display:inline-block;margin:0 0 12px;padding-left:1.2em}
+#st{font-size:.9rem;opacity:.8}
+button{font:inherit;font-weight:600;padding:12px 28px;border:0;border-radius:999px;background:var(--acc);color:#fff;cursor:pointer}
+button:disabled{opacity:.45;cursor:default}
+</style>
+</head>
+<body>
+<div id="stage"><div id="ui">
+<h1>INCINERA MR</h1>
+<p>Simulador de combate a incêndios em realidade mista.</p>
+<ul id="il"></ul><br>
+<button id="go" disabled>Entrar em AR</button>
+<p id="st"></p>
+</div></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+/* ===== Configuração ===== */
+const CFG={scanMs:8000,planeMs:4500,dmin:1,dmax:3};          // tempos (ms) e distância fogo-extintor (m)
+const MK={src:'marker.png',w:.05};                            // imagem do marcador no mesmo diretório; largura física estimada: 5 cm
+const IL=['Observe lentamente o ambiente ao seu redor.','Olhe para diferentes direções para reconhecer o ambiente.','Aguarde a tentativa de identificação do marcador.','Mantenha uma área livre para se movimentar com segurança.','Siga as instruções de posicionamento, se necessárias.','Inicie a simulação quando estiver pronto.'];
+const MN={qr_marker:'QR Code (pose espacial)',spatial_placement:'Planos detectados',manual_placement:'Manual',none:'—'};
+const $=id=>document.getElementById(id),T=THREE,R=Math.random,fmt=s=>s.toFixed(1).replace('.',',')+' s';
+const st=$('st');
+IL.forEach(t=>{const li=document.createElement('li');li.textContent=t;$('il').append(li)});
+
+/* ===== Renderização (Three.js r128) ===== */
+const stage=$('stage'),renderer=new T.WebGLRenderer({antialias:true,alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.xr.enabled=true;stage.prepend(renderer.domElement);
+const scene=new T.Scene(),cam=new T.PerspectiveCamera(65,1,.05,50),light=new T.PointLight(0xff7a20,0,4);
+scene.add(light,new T.AmbientLight(0xffffff,.9));
+function resize(){if(!renderer.xr.isPresenting){const w=stage.clientWidth,h=stage.clientHeight;renderer.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix()}}
+addEventListener('resize',resize);resize();
+
+/* ===== Partículas: fogo, jato, fumaça (preservado) ===== */
+const cv=document.createElement('canvas');cv.width=cv.height=64;
+const cx=cv.getContext('2d'),gr=cx.createRadialGradient(32,32,0,32,32,32);
+gr.addColorStop(0,'#fff');gr.addColorStop(1,'rgba(255,255,255,0)');cx.fillStyle=gr;cx.fillRect(0,0,64,64);
+const tex=new T.CanvasTexture(cv);
+const VS='attribute float s;attribute vec4 c;varying vec4 v;void main(){v=c;vec4 m=modelViewMatrix*vec4(position,1.);gl_PointSize=s*700./-m.z;gl_Position=projectionMatrix*m;}';
+const FS='uniform sampler2D t;varying vec4 v;void main(){gl_FragColor=v*texture2D(t,gl_PointCoord);}';
+class P{
+ constructor(n,b){this.n=n;this.i=0;this.p=new Float32Array(n*3);this.v=new Float32Array(n*3);this.l=new Float32Array(n);this.m=new Float32Array(n).fill(1);this.s=new Float32Array(n);this.c=new Float32Array(n*4);
+  const g=new T.BufferGeometry();g.setAttribute('position',new T.BufferAttribute(this.p,3));g.setAttribute('s',new T.BufferAttribute(this.s,1));g.setAttribute('c',new T.BufferAttribute(this.c,4));
+  this.g=g;this.o=new T.Points(g,new T.ShaderMaterial({uniforms:{t:{value:tex}},vertexShader:VS,fragmentShader:FS,transparent:true,depthWrite:false,blending:b}));
+  this.o.frustumCulled=false;scene.add(this.o)}
+ emit(x,y,z,a,b,c,life){const i=this.i++%this.n,k=i*3;this.p[k]=x;this.p[k+1]=y;this.p[k+2]=z;this.v[k]=a;this.v[k+1]=b;this.v[k+2]=c;this.l[i]=this.m[i]=life}
+ clear(){this.l.fill(0);this.s.fill(0)}
+ update(dt,g,f){for(let i=0;i<this.n;i++){const k=i*3;
+  if(this.l[i]>0){this.l[i]-=dt;this.p[k]+=this.v[k]*dt;this.p[k+1]+=this.v[k+1]*dt;this.p[k+2]+=this.v[k+2]*dt;this.v[k+1]+=g*dt;f(i,Math.min(1,1-this.l[i]/this.m[i]))}else this.s[i]=0}
+  const a=this.g.attributes;a.position.needsUpdate=a.s.needsUpdate=a.c.needsUpdate=true}
+}
+const fire=new P(220,T.AdditiveBlending),jet=new P(160,T.NormalBlending),smoke=new P(160,T.NormalBlending);
+
+/* ===== Estado global ===== */
+let state='INTRO',cur={},status='',method='none',surf='',res=null,smp=[],t0=0,t1=0,lastS=0,scanT=0,placeT=0,seen=false;
+let spray=false,fi=1,out=false,smokeT=0,acc=0,sacc=0,have=false,held=-1,armed=false,dropped=false,exs='',last=0,hov='',man=null,retOK=false,mkOK=false,mkReq=false,nz,body;
+const FP=new T.Vector3(),EP=new T.Vector3(),EO=.3,np=new T.Vector3(),nd=new T.Vector3(),tmp=new T.Vector3(),v3=new T.Vector3(),v4=new T.Vector3(),v5=new T.Vector3(),v6=new T.Vector3(),q=new T.Quaternion(),hpV=new T.Vector3(0,1.5,0),hf=new T.Vector3(0,0,-1),gp=new T.Plane(new T.Vector3(0,1,0),0),rc=new T.Raycaster();
+
+/* ===== Extintor (modelo preservado) ===== */
+function mkExt(){const g=new T.Group(),add=(geo,c,x,y,z)=>{const m=new T.Mesh(geo,new T.MeshLambertMaterial({color:c}));m.position.set(x,y,z);g.add(m);return m};
+ body=add(new T.CylinderGeometry(.045,.045,.26,16),0xc8102e,0,-.17,.04);
+ add(new T.BoxGeometry(.05,.035,.09),0x222222,0,-.02,.03);
+ add(new T.ConeGeometry(.012,.07,10),0x222222,0,-.02,-.05).rotation.x=-Math.PI/2;
+ nz=new T.Object3D();nz.position.set(0,-.02,-.09);g.add(nz);g.visible=false;return g}
+const ext=mkExt();scene.add(ext);
+function setEP(v){EP.copy(v);ext.position.set(v.x,v.y+EO,v.z);ext.quaternion.identity();ext.lookAt(2*ext.position.x-FP.x,ext.position.y,2*ext.position.z-FP.z)}
+
+/* ===== Painel retangular em MR ===== */
+const pc=document.createElement('canvas');pc.width=1024;pc.height=700;const px=pc.getContext('2d'),ptex=new T.CanvasTexture(pc);
+const pm=new T.Mesh(new T.PlaneGeometry(1.3,1.3*700/1024),new T.MeshBasicMaterial({map:ptex,transparent:true,depthWrite:false}));pm.visible=false;scene.add(pm);
+const dot=new T.Mesh(new T.SphereGeometry(.012,8,8),new T.MeshBasicMaterial({color:0xffffff,depthTest:false}));dot.renderOrder=9;dot.visible=false;scene.add(dot);
+let btns=[];
+function draw(sp){const F='system-ui,sans-serif';px.clearRect(0,0,1024,700);px.fillStyle='rgba(12,15,20,.92)';px.fillRect(0,0,1024,700);
+ px.strokeStyle='#ff5a36';px.lineWidth=4;px.strokeRect(2,2,1020,696);px.textAlign='left';
+ px.fillStyle='#fff';px.font='700 '+Math.min(58,Math.floor(944/(sp.t.length*.6)))+'px '+F;px.fillText(sp.t,40,80);
+ px.fillStyle='#9fb0c3';px.font='400 30px '+F;px.fillText(sp.s||'',40,125);
+ px.fillStyle='#e8edf2';(sp.l||[]).forEach((l,i)=>px.fillText(l,40,185+i*44));
+ px.fillStyle='#ffb02e';px.font='700 32px '+F;px.fillText(sp.st||'',40,500);
+ if(sp.x)sp.x(px);
+ btns=[];(sp.b||[]).forEach((b,i,a)=>{const w=a.length>1?440:480,x=40+i*(w+24),y=570,on=b.on!==false;btns.push({id:b.id,x,y,w,h:92,on});
+  px.fillStyle=!on?'#3a4048':hov===b.id?'#ff7a45':'#c8102e';px.fillRect(x,y,w,92);px.fillStyle='#fff';px.font='700 32px '+F;px.textAlign='center';px.fillText(b.t,x+w/2,y+58);px.textAlign='left'});
+ ptex.needsUpdate=true}
+const hc=document.createElement('canvas');hc.width=800;hc.height=120;const hx=hc.getContext('2d'),htex=new T.CanvasTexture(hc);
+const hm=new T.Mesh(new T.PlaneGeometry(.8,.12),new T.MeshBasicMaterial({map:htex,transparent:true,depthWrite:false}));hm.visible=false;scene.add(hm);
+let hudS='';
+function hud(s,col){if(s===hudS)return;hudS=s;hx.clearRect(0,0,800,120);hx.fillStyle='rgba(12,15,20,.85)';hx.fillRect(0,0,800,120);hx.fillStyle=col||'#fff';hx.textAlign='center';
+ let f=42;hx.font='700 '+f+'px system-ui,sans-serif';while(hx.measureText(s).width>760&&f>16){f-=2;hx.font='700 '+f+'px system-ui,sans-serif'}hx.fillText(s,400,72);htex.needsUpdate=true;hm.visible=true}
+const front=(d,dy)=>new T.Vector3(hpV.x+hf.x*d,hpV.y+dy,hpV.z+hf.z*d);
+
+/* ===== Telas ===== */
+const SP={
+ SCANNING:()=>({t:'INCINERA MR',s:'Simulador de combate a incêndios em realidade mista.',l:IL,st:status,b:[{id:'start',t:'INICIAR SIMULAÇÃO',on:false}]}),
+ NOMARKER:()=>({t:'NÃO FOI POSSÍVEL LOCALIZAR O MARCADOR',l:['Não foi possível identificar o QR Code ou obter','sua posição espacial. Você pode continuar usando','um método alternativo de posicionamento.','','Como deseja proceder?'],b:[{id:'alt',t:'CONTINUAR SEM QR CODE'},{id:'retry',t:'TENTAR NOVAMENTE'}]}),
+ AUTH:()=>({t:'AUTORIZAR MODO ALTERNATIVO',l:['O fogo e o extintor serão posicionados por detecção','de planos ou pela sua seleção manual. Nenhum local','será tratado como superfície real sem verificação.','','Você autoriza o uso do modo alternativo?'],b:[{id:'ok',t:'AUTORIZAR'},{id:'cancel',t:'CANCELAR'}]}),
+ READY:()=>({t:'AMBIENTE PREPARADO',l:['Verifique o local do fogo e o ponto do extintor.','Se necessário, reposicione antes de começar.','','Método: '+MN[method],surf],b:[{id:'start',t:'INICIAR SIMULAÇÃO'},{id:'again',t:'REPOSICIONAR'}]}),
+ RESULTS:()=>({t:'SIMULAÇÃO FINALIZADA',s:'Resultados da tentativa',l:['Status: '+res.status,'Tempo total: '+fmt(res.t),'Método: '+MN[res.m],'Distância (cabeça): '+(res.d==null?'Não disponível':res.d.toFixed(1).replace('.',',')+' m'),'Amostras de posição: '+res.n],b:[{id:'home',t:'VOLTAR AO INÍCIO'}],x:mapa})
+};
+function mapa(g){const X=560,Y=150,W=424,H=370;g.strokeStyle='#33404d';g.lineWidth=2;g.strokeRect(X,Y,W,H);
+ if(smp.length<10){g.fillStyle='#9fb0c3';g.font='400 26px system-ui,sans-serif';['Percurso e mapa de calor:','amostras insuficientes ou não','coletadas nesta execução.'].forEach((s,i)=>g.fillText(s,X+16,Y+60+i*40));return}
+ const xs=smp.map(a=>a[1]).concat(FP.x,EP.x),zs=smp.map(a=>a[2]).concat(FP.z,EP.z),mx=Math.min(...xs)-.3,Mx=Math.max(...xs)+.3,mz=Math.min(...zs)-.3,Mz=Math.max(...zs)+.3,
+  s=Math.min(W/(Mx-mx),H/(Mz-mz)),ox=X+(W-(Mx-mx)*s)/2,oz=Y+(H-(Mz-mz)*s)/2,Pt=(x,z)=>[ox+(x-mx)*s,oz+(z-mz)*s],cell={},cs=.3;
+ smp.forEach(a=>{const k=Math.floor(a[1]/cs)+','+Math.floor(a[2]/cs);cell[k]=(cell[k]||0)+1});const mc=Math.max(...Object.values(cell));
+ for(const k in cell){const [i,j]=k.split(',').map(Number),[x,y]=Pt(i*cs,j*cs),r=cell[k]/mc;g.fillStyle='rgba(255,'+((160-110*r)|0)+',40,'+(.25+.7*r)+')';g.fillRect(x,y,cs*s,cs*s)}
+ g.strokeStyle='#fff';g.lineWidth=2;g.beginPath();smp.forEach((a,i)=>{const[x,y]=Pt(a[1],a[2]);i?g.lineTo(x,y):g.moveTo(x,y)});g.stroke();
+ [[FP,'#ff5a36','F'],[EP,'#c8102e','E']].forEach(([p,c,l])=>{const[x,y]=Pt(p.x,p.z);g.fillStyle=c;g.beginPath();g.arc(x,y,13,0,7);g.fill();g.fillStyle='#fff';g.font='700 18px system-ui,sans-serif';g.textAlign='center';g.fillText(l,x,y+6);g.textAlign='left'})}
+
+/* ===== Máquina de estados: INTRO > SCANNING > (NOMARKER > AUTH > PLACEMENT) > READY > SIMULATION > COMPLETED > RESULTS ===== */
+function go(s){state=s;spray=false;hov='';dot.visible=false;
+ if(SP[s]){cur=SP[s]();draw(cur);const p=front(1.2,-.15);pm.position.set(p.x,Math.max(p.y,.9),p.z);pm.lookAt(hpV.x,pm.position.y,hpV.z);pm.visible=true}else pm.visible=false;
+ if(s!=='PLACEMENT'&&s!=='SIMULATION'&&s!=='COMPLETED'){hm.visible=false;hudS=''}
+ if(s==='SCANNING'){scanT=performance.now();seen=false;status='Preparando ambiente.';cur=SP.SCANNING();draw(cur);hm.visible=false;hudS=''}}
+function click(id){
+ if(id==='start'&&state==='READY')startSim();
+ else if(id==='again'||id==='retry'){have=false;ext.visible=false;go('SCANNING')}
+ else if(id==='alt')go('AUTH');
+ else if(id==='cancel')go('NOMARKER');
+ else if(id==='ok')beginPlace();
+ else if(id==='home')exitAR()}
+function ready(){have=true;ext.visible=true;ret.visible=false;man=null;go('READY')}
+function startSim(){if(!have)return;fi=1;out=false;smokeT=0;held=-1;armed=false;dropped=false;smp=[];lastS=0;res=null;pm.visible=false;t0=performance.now();hudS='';state='SIMULATION'}
+function finish(){if(state!=='SIMULATION')return;t1=performance.now();out=true;smokeT=3;drop();spray=false;
+ let d=0;for(let i=1;i<smp.length;i++)d+=Math.hypot(smp[i][1]-smp[i-1][1],smp[i][2]-smp[i-1][2]);
+ res={status:'Incêndio controlado',t:(t1-t0)/1000,m:method,d:smp.length>=5?d:null,n:smp.length};
+ state='COMPLETED';hud('INCÊNDIO CONTROLADO — SIMULAÇÃO FINALIZADA','#7ee787');setTimeout(()=>{if(state==='COMPLETED')go('RESULTS')},2500)}
+function resetSim(){[fire,jet,smoke].forEach(s=>s.clear());fi=1;out=false;smokeT=0;spray=false;held=-1;armed=false;dropped=false;man=null;scene.add(ext);ext.visible=false;hm.visible=false;hudS='';ret.visible=false}
+function resetAll(){resetSim();have=false;smp=[];res=null;go('SCANNING')}
+
+/* ===== Saída da imersão: encerra a sessão WebXR e volta à página inicial 2D ===== */
+function exitAR(){
+ const s=renderer.xr.getSession();
+ if(s){s.end().catch(()=>cleanupToIntro())}   // dispara 'sessionend'
+ else cleanupToIntro()}
+function cleanupToIntro(){
+ resetSim();have=false;smp=[];res=null;method='none';status='';seen=false;
+ state='INTRO';pm.visible=false;dot.visible=false;hm.visible=false;hudS='';
+ $('ui').hidden=false;$('go').disabled=false;
+ st.textContent='AR disponível neste dispositivo.';resize()}
+
+/* ===== Marcador (QR): decodificar, detectar e obter pose são operações distintas ===== */
+function scan(frame,ref,now){const dt=now-scanT;
+ if(mkOK&&frame.getImageTrackingResults){for(const r of frame.getImageTrackingResults()){if(r.trackingState!=='tracked')continue;seen=true;const p=frame.getPose(r.imageSpace,ref);
+  if(p){const o=p.transform.orientation,rt=new T.Vector3(1,0,0).applyQuaternion(new T.Quaternion(o.x,o.y,o.z,o.w));rt.y=0;rt.normalize();
+   FP.set(p.transform.position.x,p.transform.position.y,p.transform.position.z);v3.copy(FP).addScaledVector(rt,1.2);setEP(v3);method='qr_marker';surf='Pose do marcador obtida.';ready();return}}}
+ let s=dt<900?'Preparando ambiente.':mkOK&&dt<CFG.scanMs?(seen?'Marcador encontrado, sem pose espacial.':'Procurando marcador.'):!mkOK&&dt<2400?'Rastreamento de marcador indisponível.':null;
+ if(s===null){go('NOMARKER');return}
+ if(s!==status){status=s;cur.st=s;draw(cur)}}
+
+/* ===== Posicionamento alternativo (após autorização) ===== */
+const ret=new T.Mesh(new T.RingGeometry(.08,.1,24).rotateX(-Math.PI/2),new T.MeshBasicMaterial({color:0x7ee787,side:T.DoubleSide}));ret.visible=false;scene.add(ret);
+function beginPlace(){state='PLACEMENT';pm.visible=false;man=null;placeT=performance.now();hudS='';const p=front(1.1,-.35);hm.position.copy(p);hud('Procurando superfícies.')}
+function inPoly(pl,x,z){let c=false;for(let i=0,j=pl.length-1;i<pl.length;j=i++){const a=pl[i],b=pl[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])c=!c}return c}
+function planePts(frame,ref){const o=[];frame.detectedPlanes.forEach(pl=>{if(pl.orientation!=='horizontal'||pl.semanticLabel==='ceiling')return;const p=frame.getPose(pl.planeSpace,ref);if(!p)return;
+ const m=new T.Matrix4().fromArray(p.transform.matrix),y=m.elements[13];if(y<-.1||y>1.3)return;
+ const pg=pl.polygon.map(a=>[a.x,a.z]);if(pg.length<3)return;let ar=0,cx=0,cz=0;pg.forEach((a,i)=>{const b=pg[(i+1)%pg.length];ar+=a[0]*b[1]-b[0]*a[1];cx+=a[0];cz+=a[1]});
+ if(Math.abs(ar)/2<.3)return;cx/=pg.length;cz/=pg.length;
+ for(let k=0;k<30;k++){const a=pg[(R()*pg.length)|0],s=R()*.8,x=cx+(a[0]-cx)*s,z=cz+(a[1]-cz)*s;if(inPoly(pg,x,z))o.push(new T.Vector3(x,0,z).applyMatrix4(m))}});return o}
+function placing(frame,ref,now){
+ if(man){reticle(frame,ref);return}
+ if(frame.detectedPlanes&&now-placeT<CFG.planeMs){const c=planePts(frame,ref),f=c.filter(p=>p.y<.25),e=c.filter(p=>p.y<1.3);
+  if(f.length&&e.length){const a=f[(R()*f.length)|0],ok=e.filter(p=>{const d=p.distanceTo(a);return d>=CFG.dmin&&d<=CFG.dmax});
+   if(ok.length){FP.copy(a);setEP(ok[(R()*ok.length)|0]);method='spatial_placement';surf='Planos detectados pelo navegador.';ready()}}}
+ else{man={step:0};hud('Aponte para o local do FOGO e faça pinça.');const s=renderer.xr.getSession();
+  ctl.forEach(c=>{if(c.userData.src&&s.requestHitTestSource)s.requestHitTestSource({space:c.userData.src.targetRaySpace}).then(h=>{c.userData.ht=h}).catch(()=>{})})}}
+function reticle(frame,ref){retOK=false;ctl.forEach(c=>{if(!c.userData.h)return;let p=null;c.updateWorldMatrix(true,false);
+ if(c.userData.ht){const r=frame.getHitTestResults(c.userData.ht)[0],g=r&&r.getPose(ref);if(g){p=v3.set(g.transform.position.x,g.transform.position.y,g.transform.position.z);surf='Superfície confirmada por hit-test.'}}
+ else{rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);p=rc.ray.intersectPlane(gp,v3);surf='Sem detecção de superfície: confirme visualmente.'}
+ if(p){ret.position.copy(p);retOK=true}});ret.visible=retOK}
+function placeManual(){if(!retOK)return;
+ if(man.step===0){FP.copy(ret.position);man.step=1;hud('Agora aponte para o local do EXTINTOR e faça pinça.')}
+ else{const d=FP.distanceTo(ret.position);if(d<CFG.dmin||d>CFG.dmax){hud('Distância inválida: use entre '+CFG.dmin+' e '+CFG.dmax+' m.','#ff8a65');return}
+  setEP(ret.position);method='manual_placement';ready()}}
+
+/* ===== Entrada: pinça (mão) ou gatilho (controle) ===== */
+const ctl=[0,1].map(i=>{const c=renderer.xr.getController(i);scene.add(c,renderer.xr.getHand(i));
+ c.addEventListener('connected',e=>{c.userData.h=e.data.handedness||'none';c.userData.src=e.data});
+ c.addEventListener('disconnected',()=>{c.userData.h=null;c.userData.src=null;c.userData.ht=null;if(held===i)drop()});
+ c.addEventListener('selectstart',()=>sel(i));
+ c.addEventListener('selectend',()=>{spray=false;if(held===i)armed=true});
+ c.addEventListener('squeezestart',()=>{if(held===i)drop()});return c});
+function jw(i,n,o){const h=renderer.xr.getHand(i),j=h.joints&&h.joints[n];if(j&&j.visible){j.getWorldPosition(o);return true}return false}
+function hpos(i,o){if(jw(i,'index-finger-tip',o))return o;ctl[i].updateWorldMatrix(true,false);return o.setFromMatrixPosition(ctl[i].matrixWorld)}
+function sel(i){
+ if(pm.visible&&hov){click(hov);return}
+ if(state==='PLACEMENT'&&man){placeManual();return}
+ if(state!=='SIMULATION')return;
+ if(held<0){ext.getWorldPosition(v4);if(hpos(i,v5).distanceTo(v4)<.22){held=i;armed=false;dropped=false;ctl[i].add(ext);ext.position.set(0,0,0);ext.quaternion.identity()}}
+ else if(held===i&&armed)spray=true}
+function drop(){if(held<0)return;held=-1;spray=false;dropped=true;scene.attach(ext);ext.rotation.x=ext.rotation.z=0}
+function point(){hov='';let best=null;
+ if(pm.visible)ctl.forEach(c=>{if(!c.userData.h)return;c.updateWorldMatrix(true,false);rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);
+  const h=rc.intersectObject(pm)[0];if(h&&(!best||h.distance<best.distance))best=h});
+ dot.visible=!!best;if(best){dot.position.copy(best.point);const u=best.uv.x*1024,v=(1-best.uv.y)*700,b=btns.find(b=>u>=b.x&&u<=b.x+b.w&&v>=b.y&&v<=b.y+b.h);hov=b&&b.on?b.id:''}
+ if(pm.visible&&cur.b&&hov!==point.h){point.h=hov;draw(cur)}}
+
+/* ===== Laço principal ===== */
+renderer.setAnimationLoop((t,frame)=>{
+ const dt=Math.min((t-last)/1000||.016,.05);last=t;const ref=renderer.xr.getReferenceSpace();
+ if(frame&&ref){const vp=frame.getViewerPose(ref);
+  if(vp){const p=vp.transform.position,o=vp.transform.orientation;hpV.set(p.x,p.y,p.z);tmp.set(0,0,-1).applyQuaternion(q.set(o.x,o.y,o.z,o.w));tmp.y=0;if(tmp.lengthSq()>.01)hf.copy(tmp).normalize();
+   if(state==='SCANNING')scan(frame,ref,t);else if(state==='PLACEMENT')placing(frame,ref,t);
+   else if(state==='SIMULATION'&&t-lastS>200){lastS=t;smp.push([t,p.x,p.z])}}}
+ point();
+ ext.getWorldPosition(v4);nz.getWorldPosition(np);ext.getWorldQuaternion(q);nd.set(0,0,-1).applyQuaternion(q);
+ if(state==='SIMULATION'){
+  let near=false;if(held<0)for(let i=0;i<2;i++)if(ctl[i].userData.h&&hpos(i,v5).distanceTo(v4)<.22)near=true;
+  if(held>=0&&jw(held,'thumb-tip',v5)&&jw(held,'middle-finger-tip',v6)&&v5.distanceTo(v6)<.025)drop();
+  exs=held>=0?(spray?'jato ativo':'extintor em posse'):near?'extintor selecionado':dropped?'extintor solto':'extintor disponível';
+  body.material.emissive.setHex(held>=0?0x0a3a0a:near?0x555500:0);
+  hud(fmt((t-t0)/1000)+'  |  '+exs);
+  if(spray&&!out){sacc+=dt*140;
+   while(sacc>=1){sacc--;const s=3+R();jet.emit(np.x,np.y,np.z,nd.x*s+(R()-.5)*.8,nd.y*s+(R()-.5)*.8,nd.z*s+(R()-.5)*.8,.45+R()*.3)}
+   tmp.copy(FP);tmp.y+=.35;tmp.sub(np);const d=tmp.length();
+   if(d<3.5&&nd.angleTo(tmp)<.3+Math.atan(.35/d)){fi=Math.max(0,fi-dt/4.5);if(fi<=0)finish()}}
+ }else body.material.emissive.setHex(0);
+ if(held<0&&ext.position.y>EP.y+EO+.001)ext.position.y=Math.max(EP.y+EO,ext.position.y-3*dt);
+ if(have&&!out){acc+=fi*dt*110;while(acc>=1){acc--;fire.emit(FP.x+(R()-.5)*.4*fi,FP.y+.03,FP.z+(R()-.5)*.4*fi,(R()-.5)*.2,.6+R()*.5,(R()-.5)*.2,.7+R()*.5)}}
+ if(smokeT>0){smokeT-=dt;smoke.emit(FP.x+(R()-.5)*.2,FP.y+.1,FP.z+(R()-.5)*.2,(R()-.5)*.1,.5,(R()-.5)*.1,1.8)}
+ fire.update(dt,.4,(i,u)=>{const k=i*4,c=fire.c;fire.s[i]=(.36-.22*u)*(.3+.7*fi);c[k]=1;c[k+1]=.8-.65*u;c[k+2]=.25*(1-u);c[k+3]=.8*(1-u)});
+ jet.update(dt,-2.5,(i,u)=>{const k=i*4,c=jet.c;jet.s[i]=.05+.16*u;c[k]=.85;c[k+1]=.93;c[k+2]=1;c[k+3]=.6*(1-u)});
+ smoke.update(dt,.1,(i,u)=>{const k=i*4,c=smoke.c;smoke.s[i]=.2+.6*u;c[k]=c[k+1]=c[k+2]=.55;c[k+3]=.4*(1-u)});
+ light.position.set(FP.x,FP.y+.5,FP.z);light.intensity=have&&!out?fi*(1.2+R()*.8):0;
+ if(state==='SIMULATION'||state==='COMPLETED')hm.position.set(FP.x,FP.y+1.3,FP.z);
+ if(hm.visible)hm.lookAt(hpV.x,hm.position.y,hpV.z);
+ renderer.render(scene,cam)});
+
+/* ===== Sessão WebXR ===== */
+renderer.xr.addEventListener('sessionstart',()=>{const s=renderer.xr.getSession();
+ mkOK=mkReq&&typeof XRFrame!=='undefined'&&'getImageTrackingResults' in XRFrame.prototype;
+ $('ui').hidden=true;resetSim();have=false;method='none';go('SCANNING')});
+renderer.xr.addEventListener('sessionend',cleanupToIntro);
+(navigator.xr?navigator.xr.isSessionSupported('immersive-ar').catch(()=>false):Promise.resolve(false)).then(ok=>{
+ $('go').disabled=!ok;st.textContent=ok?'AR disponível neste dispositivo.':'AR indisponível aqui. Abra no Navegador do Meta Quest 3.'});
+$('go').onclick=async()=>{try{st.textContent='Iniciando AR.';renderer.xr.setReferenceSpaceType('local-floor');
+ const o={requiredFeatures:['local-floor'],optionalFeatures:['hand-tracking','hit-test','plane-detection']};mkReq=false;
+ if(MK.src){try{const b=await createImageBitmap(await (await fetch(MK.src)).blob());o.trackedImages=[{image:b,widthInMeters:MK.w}];o.optionalFeatures.push('image-tracking');mkReq=true}catch(e){}}
+ const s=await navigator.xr.requestSession('immersive-ar',o);await renderer.xr.setSession(s)}
+ catch(e){st.textContent='Não foi possível iniciar o AR: '+e.message+(e.name==='SecurityError'?' A hospedagem bloqueou o WebXR; use um endereço HTTPS próprio.':'')}};
+</script>
+</body>
+</html>
