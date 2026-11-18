@@ -133,18 +133,19 @@ function go(s){state=s;spray=false;hov='';dot.visible=false;
  if(s==='SCANNING'){scanT=performance.now();seen=false;status='Preparando ambiente.';cur=SP.SCANNING();draw(cur);hm.visible=false;hudS=''}}
 function click(id){
  if(id==='start'&&state==='READY')startSim();
- else if(id==='again'||id==='retry'){have=false;ext.visible=false;go('SCANNING')}
+ else if(id==='retry'){have=false;ext.visible=false;go('SCANNING')}
+ else if(id==='again'){have=false;ext.visible=false;beginPlace()}
  else if(id==='alt')go('AUTH');
  else if(id==='cancel')go('NOMARKER');
  else if(id==='ok')beginPlace();
  else if(id==='home')exitAR()}
-function ready(){have=true;ext.visible=true;ret.visible=false;man=null;go('READY')}
+function ready(){have=true;ext.visible=true;rets.forEach(r=>r.visible=false);man=null;go('READY')}
 function startSim(){if(!have)return;fi=1;out=false;smokeT=0;held=-1;armed=false;dropped=false;smp=[];lastS=0;res=null;pm.visible=false;t0=performance.now();hudS='';state='SIMULATION'}
 function finish(){if(state!=='SIMULATION')return;t1=performance.now();out=true;smokeT=3;drop();spray=false;
  let d=0;for(let i=1;i<smp.length;i++)d+=Math.hypot(smp[i][1]-smp[i-1][1],smp[i][2]-smp[i-1][2]);
  res={status:'Incêndio controlado',t:(t1-t0)/1000,m:method,d:smp.length>=5?d:null,n:smp.length};
  state='COMPLETED';hud('INCÊNDIO CONTROLADO — SIMULAÇÃO FINALIZADA','#7ee787');setTimeout(()=>{if(state==='COMPLETED')go('RESULTS')},2500)}
-function resetSim(){[fire,jet,smoke].forEach(s=>s.clear());fi=1;out=false;smokeT=0;spray=false;held=-1;armed=false;dropped=false;man=null;scene.add(ext);ext.visible=false;hm.visible=false;hudS='';ret.visible=false}
+function resetSim(){[fire,jet,smoke].forEach(s=>s.clear());fi=1;out=false;smokeT=0;spray=false;held=-1;armed=false;dropped=false;man=null;scene.add(ext);ext.visible=false;hm.visible=false;hudS='';rets.forEach(r=>r.visible=false)}
 function resetAll(){resetSim();have=false;smp=[];res=null;go('SCANNING')}
 
 /* ===== Saída da imersão: encerra a sessão WebXR e volta à página inicial 2D ===== */
@@ -167,35 +168,31 @@ function scan(frame,ref,now){const dt=now-scanT;
  if(s===null){go('NOMARKER');return}
  if(s!==status){status=s;cur.st=s;draw(cur)}}
 
-/* ===== Posicionamento alternativo (após autorização) ===== */
+/* ===== Posicionamento manual (após autorização): 1º FOGO, 2º EXTINTOR ===== */
 const ret=new T.Mesh(new T.RingGeometry(.08,.1,24).rotateX(-Math.PI/2),new T.MeshBasicMaterial({color:0x7ee787,side:T.DoubleSide}));ret.visible=false;scene.add(ret);
-function beginPlace(){state='PLACEMENT';pm.visible=false;man=null;placeT=performance.now();hudS='';const p=front(1.1,-.35);hm.position.copy(p);hud('Procurando superfícies.')}
-function inPoly(pl,x,z){let c=false;for(let i=0,j=pl.length-1;i<pl.length;j=i++){const a=pl[i],b=pl[j];if((a[1]>z)!==(b[1]>z)&&x<(b[0]-a[0])*(z-a[1])/(b[1]-a[1])+a[0])c=!c}return c}
-function planePts(frame,ref){const o=[];frame.detectedPlanes.forEach(pl=>{if(pl.orientation!=='horizontal'||pl.semanticLabel==='ceiling')return;const p=frame.getPose(pl.planeSpace,ref);if(!p)return;
- const m=new T.Matrix4().fromArray(p.transform.matrix),y=m.elements[13];if(y<-.1||y>1.3)return;
- const pg=pl.polygon.map(a=>[a.x,a.z]);if(pg.length<3)return;let ar=0,cx=0,cz=0;pg.forEach((a,i)=>{const b=pg[(i+1)%pg.length];ar+=a[0]*b[1]-b[0]*a[1];cx+=a[0];cz+=a[1]});
- if(Math.abs(ar)/2<.3)return;cx/=pg.length;cz/=pg.length;
- for(let k=0;k<30;k++){const a=pg[(R()*pg.length)|0],s=R()*.8,x=cx+(a[0]-cx)*s,z=cz+(a[1]-cz)*s;if(inPoly(pg,x,z))o.push(new T.Vector3(x,0,z).applyMatrix4(m))}});return o}
-function placing(frame,ref,now){
- if(man){reticle(frame,ref);return}
- if(frame.detectedPlanes&&now-placeT<CFG.planeMs){const c=planePts(frame,ref),f=c.filter(p=>p.y<.25),e=c.filter(p=>p.y<1.3);
-  if(f.length&&e.length){const a=f[(R()*f.length)|0],ok=e.filter(p=>{const d=p.distanceTo(a);return d>=CFG.dmin&&d<=CFG.dmax});
-   if(ok.length){FP.copy(a);setEP(ok[(R()*ok.length)|0]);method='spatial_placement';surf='Planos detectados pelo navegador.';ready()}}}
- else{man={step:0};hud('Aponte para o local do FOGO e faça pinça.');const s=renderer.xr.getSession();
-  ctl.forEach(c=>{if(c.userData.src&&s.requestHitTestSource)s.requestHitTestSource({space:c.userData.src.targetRaySpace}).then(h=>{c.userData.ht=h}).catch(()=>{})})}}
-function reticle(frame,ref){retOK=false;ctl.forEach(c=>{if(!c.userData.h)return;let p=null;c.updateWorldMatrix(true,false);
- if(c.userData.ht){const r=frame.getHitTestResults(c.userData.ht)[0],g=r&&r.getPose(ref);if(g){p=v3.set(g.transform.position.x,g.transform.position.y,g.transform.position.z);surf='Superfície confirmada por hit-test.'}}
- if(!p){rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);p=rc.ray.intersectPlane(gp,v3);if(p)surf='Sem detecção de superfície: confirme visualmente.'}
- if(p){ret.position.copy(p);retOK=true}});ret.visible=retOK}
-function placeManual(){if(!retOK)return;
- if(man.step===0){FP.copy(ret.position);man.step=1;hud('Agora aponte para o local do EXTINTOR e faça pinça.')}
- else{const d=FP.distanceTo(ret.position);if(d<CFG.dmin||d>CFG.dmax){hud('Distância inválida: use entre '+CFG.dmin+' e '+CFG.dmax+' m.','#ff8a65');return}
-  setEP(ret.position);method='manual_placement';ready()}}
+const rets=[ret,ret.clone()];scene.add(rets[1]);   // um anel de seleção por mão
+function beginPlace(){state='PLACEMENT';pm.visible=false;placeT=performance.now();hudS='';
+ man={step:0};hm.position.copy(front(1.1,-.35));hud('Aponte para o local do FOGO e faça pinça.')}
+function placing(frame,ref,now){if(man)reticle(frame,ref)}
+function reticle(frame,ref){const s=renderer.xr.getSession();
+ ctl.forEach((c,i)=>{const r=rets[i];c.userData.rp=null;r.visible=false;if(!c.userData.h)return;
+  c.updateWorldMatrix(true,false);let p=null;
+  if(!c.userData.ht&&!c.userData.htTried&&c.userData.src&&s.requestHitTestSource){c.userData.htTried=true;
+   s.requestHitTestSource({space:c.userData.src.targetRaySpace}).then(h=>{c.userData.ht=h}).catch(()=>{})}
+  if(c.userData.ht){const hr=frame.getHitTestResults(c.userData.ht)[0],g=hr&&hr.getPose(ref);
+   if(g){p=new T.Vector3(g.transform.position.x,g.transform.position.y,g.transform.position.z);surf='Superfície confirmada por hit-test.'}}
+  if(!p){rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);
+   p=rc.ray.intersectPlane(gp,new T.Vector3());if(p)surf='Sem detecção de superfície: confirme visualmente.'}
+  if(p){c.userData.rp=p;r.position.copy(p);r.visible=true}})}
+function placeManual(i){const p=ctl[i].userData.rp;if(!p)return;
+ if(man.step===0){FP.copy(p);man.step=1;hud('Agora aponte para o local do EXTINTOR e faça pinça.')}
+ else{const d=FP.distanceTo(p);if(d<CFG.dmin||d>CFG.dmax){hud('Distância inválida: use entre '+CFG.dmin+' e '+CFG.dmax+' m.','#ff8a65');return}
+  setEP(p);method='manual_placement';ready()}}
 
 /* ===== Entrada: pinça (mão) ou gatilho (controle) ===== */
 const ctl=[0,1].map(i=>{const c=renderer.xr.getController(i);scene.add(c,renderer.xr.getHand(i));
  c.addEventListener('connected',e=>{c.userData.h=e.data.handedness||'none';c.userData.src=e.data});
- c.addEventListener('disconnected',()=>{c.userData.h=null;c.userData.src=null;c.userData.ht=null;if(held===i)drop()});
+ c.addEventListener('disconnected',()=>{c.userData.h=null;c.userData.src=null;c.userData.ht=null;c.userData.htTried=false;if(held===i)drop()});
  c.addEventListener('selectstart',()=>sel(i));
  c.addEventListener('selectend',()=>{spray=false;if(held===i)armed=true});
  c.addEventListener('squeezestart',()=>{if(held===i)drop();else if(state==='RESULTS')exitAR()});return c});
@@ -204,7 +201,7 @@ function hpos(i,o){if(jw(i,'index-finger-tip',o))return o;ctl[i].updateWorldMatr
 function sel(i){
  if(xhov){exitAR();return}
  if(pm.visible&&hov){click(hov);return}
- if(state==='PLACEMENT'&&man){placeManual();return}
+ if(state==='PLACEMENT'&&man){placeManual(i);return}
  if(state!=='SIMULATION')return;
  if(held<0){ext.getWorldPosition(v4);if(hpos(i,v5).distanceTo(v4)<.22){held=i;armed=false;dropped=false;ctl[i].add(ext);ext.position.set(0,0,0);ext.quaternion.identity()}}
  else if(held===i&&armed)spray=true}
