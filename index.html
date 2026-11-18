@@ -100,6 +100,10 @@ function draw(sp){const F='system-ui,sans-serif';px.clearRect(0,0,1024,700);px.f
  ptex.needsUpdate=true}
 const hc=document.createElement('canvas');hc.width=800;hc.height=120;const hx=hc.getContext('2d'),htex=new T.CanvasTexture(hc);
 const hm=new T.Mesh(new T.PlaneGeometry(.8,.12),new T.MeshBasicMaterial({map:htex,transparent:true,depthWrite:false}));hm.visible=false;scene.add(hm);
+/* Botão permanente SAIR / CANCELAR (visível em qualquer etapa da imersão) */
+const xc=document.createElement('canvas');xc.width=400;xc.height=120;const xx=xc.getContext('2d'),xtex=new T.CanvasTexture(xc);let xhov=false;
+function drawX(){xx.clearRect(0,0,400,120);xx.fillStyle=xhov?'#ff7a45':'rgba(200,16,46,.92)';xx.fillRect(0,0,400,120);xx.strokeStyle='#fff';xx.lineWidth=4;xx.strokeRect(2,2,396,116);xx.fillStyle='#fff';xx.font='700 40px system-ui,sans-serif';xx.textAlign='center';xx.fillText('SAIR / CANCELAR',200,74);xtex.needsUpdate=true}
+const xm=new T.Mesh(new T.PlaneGeometry(.3,.09),new T.MeshBasicMaterial({map:xtex,transparent:true,depthWrite:false,depthTest:false}));xm.renderOrder=8;xm.visible=false;scene.add(xm);drawX();
 let hudS='';
 function hud(s,col){if(s===hudS)return;hudS=s;hx.clearRect(0,0,800,120);hx.fillStyle='rgba(12,15,20,.85)';hx.fillRect(0,0,800,120);hx.fillStyle=col||'#fff';hx.textAlign='center';
  let f=42;hx.font='700 '+f+'px system-ui,sans-serif';while(hx.measureText(s).width>760&&f>16){f-=2;hx.font='700 '+f+'px system-ui,sans-serif'}hx.fillText(s,400,72);htex.needsUpdate=true;hm.visible=true}
@@ -146,11 +150,11 @@ function resetAll(){resetSim();have=false;smp=[];res=null;go('SCANNING')}
 /* ===== Saída da imersão: encerra a sessão WebXR e volta à página inicial 2D ===== */
 function exitAR(){
  const s=renderer.xr.getSession();
- if(s){s.end().catch(()=>cleanupToIntro())}   // dispara 'sessionend'
+ if(s){s.end().catch(()=>{});setTimeout(()=>{if(state!=='INTRO')cleanupToIntro()},700)}   // 'sessionend' limpa; se não vier, força a limpeza
  else cleanupToIntro()}
 function cleanupToIntro(){
  resetSim();have=false;smp=[];res=null;method='none';status='';seen=false;
- state='INTRO';pm.visible=false;dot.visible=false;hm.visible=false;hudS='';
+ state='INTRO';pm.visible=false;dot.visible=false;hm.visible=false;xm.visible=false;xhov=false;hudS='';
  $('ui').hidden=false;$('go').disabled=false;
  st.textContent='AR disponível neste dispositivo.';resize()}
 
@@ -194,10 +198,11 @@ const ctl=[0,1].map(i=>{const c=renderer.xr.getController(i);scene.add(c,rendere
  c.addEventListener('disconnected',()=>{c.userData.h=null;c.userData.src=null;c.userData.ht=null;if(held===i)drop()});
  c.addEventListener('selectstart',()=>sel(i));
  c.addEventListener('selectend',()=>{spray=false;if(held===i)armed=true});
- c.addEventListener('squeezestart',()=>{if(held===i)drop()});return c});
+ c.addEventListener('squeezestart',()=>{if(held===i)drop();else if(state==='RESULTS')exitAR()});return c});
 function jw(i,n,o){const h=renderer.xr.getHand(i),j=h.joints&&h.joints[n];if(j&&j.visible){j.getWorldPosition(o);return true}return false}
 function hpos(i,o){if(jw(i,'index-finger-tip',o))return o;ctl[i].updateWorldMatrix(true,false);return o.setFromMatrixPosition(ctl[i].matrixWorld)}
 function sel(i){
+ if(xhov){exitAR();return}
  if(pm.visible&&hov){click(hov);return}
  if(state==='PLACEMENT'&&man){placeManual();return}
  if(state!=='SIMULATION')return;
@@ -205,6 +210,8 @@ function sel(i){
  else if(held===i&&armed)spray=true}
 function drop(){if(held<0)return;held=-1;spray=false;dropped=true;scene.attach(ext);ext.rotation.x=ext.rotation.z=0}
 function point(){hov='';let best=null;
+ let xb=false;if(xm.visible)ctl.forEach(c=>{if(!c.userData.h)return;c.updateWorldMatrix(true,false);rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);if(rc.intersectObject(xm).length)xb=true});
+ if(xb!==xhov){xhov=xb;drawX()}
  if(pm.visible)ctl.forEach(c=>{if(!c.userData.h)return;c.updateWorldMatrix(true,false);rc.ray.origin.setFromMatrixPosition(c.matrixWorld);rc.ray.direction.set(0,0,-1).transformDirection(c.matrixWorld);
   const h=rc.intersectObject(pm)[0];if(h&&(!best||h.distance<best.distance))best=h});
  dot.visible=!!best;if(best){dot.position.copy(best.point);const u=best.uv.x*1024,v=(1-best.uv.y)*700,b=btns.find(b=>u>=b.x&&u<=b.x+b.w&&v>=b.y&&v<=b.y+b.h);hov=b&&b.on?b.id:''}
@@ -239,12 +246,13 @@ renderer.setAnimationLoop((t,frame)=>{
  light.position.set(FP.x,FP.y+.5,FP.z);light.intensity=have&&!out?fi*(1.2+R()*.8):0;
  if(state==='SIMULATION'||state==='COMPLETED')hm.position.set(FP.x,FP.y+1.3,FP.z);
  if(hm.visible)hm.lookAt(hpV.x,hm.position.y,hpV.z);
+ if(state!=='INTRO'){xm.visible=true;xm.position.lerp(front(.7,-.5),.1);xm.lookAt(hpV.x,xm.position.y,hpV.z)}else xm.visible=false;
  renderer.render(scene,cam)});
 
 /* ===== Sessão WebXR ===== */
 renderer.xr.addEventListener('sessionstart',()=>{const s=renderer.xr.getSession();
  mkOK=mkReq&&typeof XRFrame!=='undefined'&&'getImageTrackingResults' in XRFrame.prototype;
- $('ui').hidden=true;resetSim();have=false;method='none';go('SCANNING')});
+ $('ui').hidden=true;xm.position.copy(front(.7,-.5));resetSim();have=false;method='none';go('SCANNING')});
 renderer.xr.addEventListener('sessionend',cleanupToIntro);
 (navigator.xr?navigator.xr.isSessionSupported('immersive-ar').catch(()=>false):Promise.resolve(false)).then(ok=>{
  $('go').disabled=!ok;st.textContent=ok?'AR disponível neste dispositivo.':'AR indisponível aqui. Abra no Navegador do Meta Quest 3.'});
